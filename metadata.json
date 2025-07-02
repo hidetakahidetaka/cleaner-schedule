@@ -1,0 +1,5 @@
+{
+  "name": "Cleaner Schedule Generator",
+  "description": "An application to generate cleaning schedules for teams of cleaners based on various constraints and preferences. Define groups, specify undesirable or desirable pairings, and get multiple schedule options.",
+  "requestFramePermissions": []
+}
