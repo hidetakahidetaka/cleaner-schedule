@@ -1,6 +1,6 @@
-
 import React, { useState, useEffect, useCallback } from 'react';
-import { Group, Schedule } from './types';
+import { GoogleGenAI } from "@google/genai";
+import { Group, Schedule, AiResponse } from './types';
 import Modal from './components/Modal';
 import InputSection from './components/InputSection';
 import GroupSettings from './components/GroupSettings';
@@ -20,6 +20,7 @@ const App: React.FC = () => {
     const [generatedSchedules, setGeneratedSchedules] = useState<Schedule[]>([]);
     const [showModal, setShowModal] = useState<boolean>(false);
     const [modalMessage, setModalMessage] = useState<string>('');
+    const [isLoading, setIsLoading] = useState<boolean>(false);
 
     const showCustomModal = (message: string) => {
         setModalMessage(message);
@@ -29,7 +30,7 @@ const App: React.FC = () => {
     useEffect(() => {
         const newGroups: Group[] = Array.from({ length: numGroups }, (_, i) => {
             const existingGroup = groups.find(g => g.id === i);
-            return existingGroup ? { ...existingGroup, members: [] } : { id: i, name: `グループ ${i + 1}`, size: 0, fixedMembers: [] };
+            return existingGroup ? { ...existingGroup } : { id: i, name: `グループ ${i + 1}`, size: 0, fixedMembers: [] };
         });
         setGroups(newGroups.slice(0, numGroups));
         // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -119,120 +120,94 @@ const App: React.FC = () => {
         return true;
     }, [startDate, numCleaners, cleanerNames, numGroups, groups, forbiddenPairs, desiredPairs]);
 
-    const generateCombinations = useCallback(() => {
+    const generateCombinationsWithAI = useCallback(async () => {
         if (!validateInputs()) return;
 
-        const allCleaners = [...cleanerNames];
-        const forbidden = parsePairs(forbiddenPairs);
-        const desired = parsePairs(desiredPairs);
-        const previousGroups = prevCombinations.flatMap(pc => {
-            if (!pc) return [];
-            return pc.split(';').map(groupStr => groupStr.split(':')[1]?.split(',').map(name => name.trim()) || []);
-        });
+        setIsLoading(true);
+        setGeneratedSchedules([]);
 
-        const generated: Schedule[] = [];
-        let attempts = 0;
-        const maxAttempts = 1000;
+        const prompt = `
+あなたは清掃チームのスケジュール作成を支援するAIアシスタントです。
+以下の条件に基づいて、ユニークな清掃スケジュールの組み合わせを3つ提案してください。
 
-        while (generated.length < 3 && attempts < maxAttempts) {
-            attempts++;
-            let isValidCombination = true;
-            let availableCleaners = [...allCleaners];
-            let tempGroups = JSON.parse(JSON.stringify(groups)).map((g: Group) => ({...g, tempMembers: [...g.fixedMembers]}));
-            
-            const allFixedMembers = tempGroups.flatMap((g: { fixedMembers: string[]; }) => g.fixedMembers);
-            availableCleaners = availableCleaners.filter(name => !allFixedMembers.includes(name));
+# 条件
 
-            // Step 2: Place desired pairs
-            let assignedDesiredCleaners = new Set(allFixedMembers);
-            for (const [c1, c2] of desired) {
-                if (assignedDesiredCleaners.has(c1) || assignedDesiredCleaners.has(c2)) continue;
+- **全清掃員リスト:** ${cleanerNames.join(', ')}
+- **総人数:** ${numCleaners}人
 
-                let placed = false;
-                const c1IsFixed = allFixedMembers.includes(c1);
-                const c2IsFixed = allFixedMembers.includes(c2);
+- **グループ構成:**
+${groups.map(g => `  - ${g.name}: ${g.size}人`).join('\n')}
 
-                if (c1IsFixed) {
-                    const targetGroup = tempGroups.find((g: { fixedMembers: string[]; }) => g.fixedMembers.includes(c1));
-                     if (targetGroup && targetGroup.tempMembers.length < targetGroup.size) {
-                        targetGroup.tempMembers.push(c2);
-                        assignedDesiredCleaners.add(c2);
-                        placed = true;
-                    }
-                } else if (c2IsFixed) {
-                     const targetGroup = tempGroups.find((g: { fixedMembers: string[]; }) => g.fixedMembers.includes(c2));
-                     if (targetGroup && targetGroup.tempMembers.length < targetGroup.size) {
-                        targetGroup.tempMembers.push(c1);
-                        assignedDesiredCleaners.add(c1);
-                        placed = true;
-                    }
-                } else {
-                    for (let i = 0; i < tempGroups.length; i++) {
-                        const group = tempGroups[i];
-                        if (group.tempMembers.length + 2 <= group.size) {
-                           group.tempMembers.push(c1, c2);
-                           assignedDesiredCleaners.add(c1);
-                           assignedDesiredCleaners.add(c2);
-                           placed = true;
-                           break;
-                        }
-                    }
+- **固定メンバー (これらのメンバーは必ず指定のグループに含まれる必要があります):**
+${groups.filter(g => g.fixedMembers.length > 0).map(g => `  - ${g.name}: ${g.fixedMembers.join(', ')}`).join('\n') || '  - なし'}
+
+- **組み合わせたくないペア (これらのペアは同じグループに入れてはいけません):**
+  - ${forbiddenPairs || 'なし'}
+
+- **組み合わせたいペア (これらのペアは可能な限り同じグループに入れてください):**
+  - ${desiredPairs || 'なし'}
+
+- **前回の組み合わせ (可能であれば、これらと完全に同じグループは避けてください):**
+  - ${prevCombinations[0] || 'なし'}
+- **前々回の組み合わせ (可能であれば、これらと完全に同じグループは避けてください):**
+  - ${prevCombinations[1] || 'なし'}
+
+# 出力形式
+- 必ず3つの異なるスケジュール案を生成してください。
+- 応答は、以下の構造を持つJSONオブジェクトのみとしてください。前後に説明文や ```json ``` マークダウンを入れないでください。
+
+\`\`\`json
+{
+  "schedules": [
+    [
+      { "name": "グループ名", "members": ["メンバー1", "メンバー2"] },
+      { "name": "グループ名", "members": ["メンバー3", "メンバー4"] }
+    ],
+    [
+      { "name": "グループ名", "members": ["メンバーA", "メンバーB"] },
+      { "name": "グループ名", "members": ["メンバーC", "メンバーD"] }
+    ],
+    [
+      { "name": "グループ名", "members": ["メンバーX", "メンバーY"] },
+      { "name": "グループ名", "members": ["メンバーZ", "メンバーW"] }
+    ]
+  ]
+}
+\`\`\`
+`;
+
+        try {
+            const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+            const response = await ai.models.generateContent({
+                model: 'gemini-2.5-flash-preview-04-17',
+                contents: prompt,
+                config: {
+                    responseMimeType: "application/json",
                 }
-
-                if (!placed) { isValidCombination = false; break; }
-            }
-            
-            if (!isValidCombination) continue;
-            availableCleaners = allCleaners.filter(name => !assignedDesiredCleaners.has(name));
-
-            // Step 3: Assign remaining cleaners
-            let shuffledAvailableCleaners = [...availableCleaners].sort(() => Math.random() - 0.5);
-            for (const cleaner of shuffledAvailableCleaners) {
-                let placed = false;
-                for (let i = 0; i < tempGroups.length; i++) {
-                    const group = tempGroups[i];
-                    if (group.tempMembers.length < group.size) {
-                        const isForbidden = group.tempMembers.some((member: string) => forbidden.some(p => (p[0] === member && p[1] === cleaner) || (p[1] === member && p[0] === cleaner)));
-                        if (!isForbidden) {
-                            group.tempMembers.push(cleaner);
-                            placed = true;
-                            break;
-                        }
-                    }
-                }
-                if (!placed) { isValidCombination = false; break; }
-            }
-            if (!isValidCombination) continue;
-
-            // Step 4: Final validation
-            const finalCombination = tempGroups.map((g: { name: string, tempMembers: string[] }) => ({ name: g.name, members: g.tempMembers.sort() }));
-            
-            // Check forbidden pairs
-            let hasForbiddenPair = finalCombination.some(group => forbidden.some(([c1, c2]) => group.members.includes(c1) && group.members.includes(c2)));
-            if (hasForbiddenPair) continue;
-
-            // Check for duplicates
-            const currentGroupsFlat = finalCombination.map(g => g.members.join(',')).sort().join(';');
-            const isDuplicateOfPrevious = previousGroups.some(pg => pg.sort().join(',') === currentGroupsFlat.split(';')[0].split(',').sort().join(',')); // Simplified check
-            const isDuplicateOfGenerated = generated.some(genComb => {
-                const genGroupsFlat = genComb.map(g => g.members.join(',')).sort().join(';');
-                return currentGroupsFlat === genGroupsFlat;
             });
-            
-            if (!isDuplicateOfPrevious && !isDuplicateOfGenerated) {
-                generated.push(finalCombination);
-            }
-        }
-        
-        if (generated.length === 0) { // If it couldn't even generate one, it's more likely a hard constraint issue.
-            showCustomModal('指定された条件で組み合わせを生成できませんでした。特に固定メンバー、必須ペア、禁止ペアの条件が厳しすぎる可能性があります。条件を見直してください。');
-        } else if (generated.length < 3) {
-            showCustomModal(`指定された条件で${generated.length}通りの組み合わせのみ生成できました。より多くの組み合わせが必要な場合は、条件を緩和してください。`);
-        }
-        
-        setGeneratedSchedules(generated);
 
-    }, [cleanerNames, groups, forbiddenPairs, desiredPairs, prevCombinations, validateInputs]);
+            let jsonStr = response.text().trim();
+            const fenceRegex = /^```(\w*)?\s*\n?(.*?)\n?\s*```$/s;
+            const match = jsonStr.match(fenceRegex);
+            if (match && match[2]) {
+                jsonStr = match[2].trim();
+            }
+
+            const parsedData: AiResponse = JSON.parse(jsonStr);
+
+            if (parsedData.schedules && Array.isArray(parsedData.schedules)) {
+                setGeneratedSchedules(parsedData.schedules);
+            } else {
+                throw new Error("AIからの応答形式が正しくありません。");
+            }
+
+        } catch (error) {
+            console.error("AI schedule generation failed:", error);
+            showCustomModal("AIによるスケジュール生成に失敗しました。条件を調整するか、時間をおいて再試行してください。");
+        } finally {
+            setIsLoading(false);
+        }
+    }, [cleanerNames, groups, numCleaners, forbiddenPairs, desiredPairs, prevCombinations, validateInputs]);
 
 
     return (
@@ -240,9 +215,9 @@ const App: React.FC = () => {
             <div className="max-w-4xl mx-auto bg-white p-6 sm:p-8 rounded-xl shadow-lg">
                 <header className="text-center mb-8">
                     <h1 className="text-3xl sm:text-4xl font-extrabold text-indigo-700">
-                        清掃員組み合わせスケジュール作成
+                        AI清掃員スケジュール作成
                     </h1>
-                    <p className="mt-2 text-gray-500">条件を入力して、最適な清掃スケジュール案を生成します。</p>
+                    <p className="mt-2 text-gray-500">条件を入力して、AIに最適なスケジュール案を生成させます。</p>
                 </header>
                 
                 {showModal && <Modal message={modalMessage} onClose={() => setShowModal(false)} />}
@@ -280,10 +255,21 @@ const App: React.FC = () => {
                     
                     <div className="text-center pt-4">
                         <button
-                            onClick={generateCombinations}
-                            className="px-8 py-3 bg-blue-600 text-white font-bold text-lg rounded-full shadow-lg hover:bg-blue-700 transform hover:scale-105 transition duration-300 ease-in-out focus:outline-none focus:ring-4 focus:ring-blue-500 focus:ring-opacity-50"
+                            onClick={generateCombinationsWithAI}
+                            disabled={isLoading}
+                            className="px-8 py-3 bg-blue-600 text-white font-bold text-lg rounded-full shadow-lg hover:bg-blue-700 transform hover:scale-105 transition duration-300 ease-in-out focus:outline-none focus:ring-4 focus:ring-blue-500 focus:ring-opacity-50 disabled:bg-gray-400 disabled:cursor-not-allowed disabled:transform-none"
                         >
-                            組み合わせを生成
+                            {isLoading ? (
+                                <span className="flex items-center justify-center">
+                                    <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                    </svg>
+                                    AIが生成中...
+                                </span>
+                            ) : (
+                                'AIで組み合わせを生成'
+                            )}
                         </button>
                     </div>
 

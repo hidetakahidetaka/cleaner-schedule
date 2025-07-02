@@ -1,3 +1,4 @@
+
 export interface Group {
   id: number;
   name: string;
@@ -6,8 +7,12 @@ export interface Group {
 }
 
 export interface GeneratedGroup {
-  name: string;
+  name:string;
   members: string[];
 }
 
 export type Schedule = GeneratedGroup[];
+
+export interface AiResponse {
+  schedules: Schedule[];
+}
