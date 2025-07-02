@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { Group, Schedule, AiResponse } from './types';
+import { Group, Schedule, AiResponse, Cleaner } from './types';
 import Modal from './components/Modal';
 import InputSection from './components/InputSection';
 import GroupSettings from './components/GroupSettings';
@@ -10,13 +10,13 @@ import ScheduleOutput from './components/ScheduleOutput';
 const App: React.FC = () => {
     const [startDate, setStartDate] = useState<string>('');
     const [numCleaners, setNumCleaners] = useState<number>(0);
-    const [cleanerNames, setCleanerNames] = useState<string[]>([]);
-    const [currentCleanerName, setCurrentCleanerName] = useState<string>('');
+    const [cleaners, setCleaners] = useState<Cleaner[]>([]);
     const [numGroups, setNumGroups] = useState<number>(0);
     const [groups, setGroups] = useState<Group[]>([]);
     const [prevCombinations, setPrevCombinations] = useState<[string, string]>(['', '']);
     const [forbiddenPairs, setForbiddenPairs] = useState<string>('');
     const [desiredPairs, setDesiredPairs] = useState<string>('');
+    const [specialRequests, setSpecialRequests] = useState<string>('');
     const [generatedSchedules, setGeneratedSchedules] = useState<Schedule[]>([]);
     const [showModal, setShowModal] = useState<boolean>(false);
     const [modalMessage, setModalMessage] = useState<string>('');
@@ -36,17 +36,16 @@ const App: React.FC = () => {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [numGroups]);
 
-    const handleAddCleanerName = () => {
-        if (currentCleanerName && !cleanerNames.includes(currentCleanerName)) {
-            setCleanerNames([...cleanerNames, currentCleanerName]);
-            setCurrentCleanerName('');
-        } else if (cleanerNames.includes(currentCleanerName)) {
+    const handleAddCleaner = (cleaner: Cleaner) => {
+        if (cleaner.name && !cleaners.some(c => c.name === cleaner.name)) {
+            setCleaners([...cleaners, cleaner]);
+        } else if (cleaners.some(c => c.name === cleaner.name)) {
             showCustomModal('この清掃員名は既に登録されています。');
         }
     };
 
-    const handleRemoveCleanerName = (nameToRemove: string) => {
-        setCleanerNames(cleanerNames.filter(name => name !== nameToRemove));
+    const handleRemoveCleaner = (nameToRemove: string) => {
+        setCleaners(cleaners.filter(c => c.name !== nameToRemove));
         setGroups(groups.map(group => ({
             ...group,
             fixedMembers: group.fixedMembers.filter(member => member !== nameToRemove)
@@ -72,8 +71,9 @@ const App: React.FC = () => {
     };
 
     const validateInputs = useCallback(() => {
+        const cleanerNames = cleaners.map(c => c.name);
         if (!startDate) { showCustomModal('開始日を選択してください。'); return false; }
-        if (numCleaners <= 0 || cleanerNames.length !== numCleaners) { showCustomModal(`清掃員の人数は ${numCleaners} 人で、登録されている清掃員名も ${numCleaners} 人である必要があります。現在 ${cleanerNames.length} 人登録されています。`); return false; }
+        if (numCleaners <= 0 || cleaners.length !== numCleaners) { showCustomModal(`清掃員の人数は ${numCleaners} 人で、登録されている清掃員も ${numCleaners} 人である必要があります。現在 ${cleaners.length} 人登録されています。`); return false; }
         if (numGroups <= 0) { showCustomModal('グループ数を入力してください。'); return false; }
 
         const totalGroupSize = groups.reduce((sum, group) => sum + group.size, 0);
@@ -121,7 +121,7 @@ const App: React.FC = () => {
         }
 
         return true;
-    }, [startDate, numCleaners, cleanerNames, numGroups, groups, forbiddenPairs, desiredPairs]);
+    }, [startDate, numCleaners, cleaners, numGroups, groups, forbiddenPairs, desiredPairs]);
     
     const generateCombinations = useCallback(async () => {
         if (!validateInputs()) return;
@@ -131,11 +131,12 @@ const App: React.FC = () => {
 
         const requestBody = {
             numCleaners,
-            cleanerNames,
+            cleaners, // Changed from cleanerNames
             groups,
             forbiddenPairs,
             desiredPairs,
             prevCombinations,
+            specialRequests, // Added
         };
 
         try {
@@ -171,7 +172,7 @@ const App: React.FC = () => {
         } finally {
             setIsLoading(false);
         }
-    }, [cleanerNames, groups, forbiddenPairs, desiredPairs, prevCombinations, validateInputs, numCleaners]);
+    }, [cleaners, groups, forbiddenPairs, desiredPairs, prevCombinations, validateInputs, numCleaners, specialRequests]);
 
 
     return (
@@ -181,7 +182,7 @@ const App: React.FC = () => {
                     <h1 className="text-3xl sm:text-4xl font-extrabold text-indigo-700">
                         AI清掃員スケジュール作成
                     </h1>
-                    <p className="mt-2 text-gray-500">条件を入力して、AIが最適な清掃スケジュール案を生成します。</p>
+                    <p className="mt-2 text-gray-500">役割やリクエストなどの詳細条件を加えて、AIが最適なスケジュールを生成します。</p>
                 </header>
                 
                 {showModal && <Modal message={modalMessage} onClose={() => setShowModal(false)} />}
@@ -191,12 +192,10 @@ const App: React.FC = () => {
                         startDate={startDate}
                         setStartDate={setStartDate}
                         numCleaners={numCleaners}
-                        setNumCleaners={(val) => { setNumCleaners(val); setCleanerNames([])}}
-                        cleanerNames={cleanerNames}
-                        currentCleanerName={currentCleanerName}
-                        setCurrentCleanerName={setCurrentCleanerName}
-                        onAddCleanerName={handleAddCleanerName}
-                        onRemoveCleanerName={handleRemoveCleanerName}
+                        setNumCleaners={(val) => { setNumCleaners(val); setCleaners([])}}
+                        cleaners={cleaners}
+                        onAddCleaner={handleAddCleaner}
+                        onRemoveCleaner={handleRemoveCleaner}
                     />
 
                     <GroupSettings
@@ -215,6 +214,8 @@ const App: React.FC = () => {
                         setForbiddenPairs={setForbiddenPairs}
                         desiredPairs={desiredPairs}
                         setDesiredPairs={setDesiredPairs}
+                        specialRequests={specialRequests}
+                        setSpecialRequests={setSpecialRequests}
                     />
                     
                     <div className="text-center pt-4">

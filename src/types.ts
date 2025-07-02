@@ -1,4 +1,9 @@
 
+export interface Cleaner {
+  name: string;
+  role: string;
+}
+
 export interface Group {
   id: number;
   name: string;

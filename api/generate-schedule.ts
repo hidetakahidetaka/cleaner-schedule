@@ -1,5 +1,7 @@
+
 import { GoogleGenAI, GenerateContentResponse } from "@google/genai";
 import type { VercelRequest, VercelResponse } from '@vercel/node';
+import type { Group, Cleaner } from '../src/types';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (req.method !== 'POST') {
@@ -15,11 +17,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     try {
         const {
             numCleaners,
-            cleanerNames,
+            cleaners, // Changed from cleanerNames
             groups,
             forbiddenPairs,
             desiredPairs,
             prevCombinations,
+            specialRequests, // Added
         } = req.body;
 
         const prompt = `
@@ -28,22 +31,28 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
 # 全体条件
 - 総清掃員数: ${numCleaners}人
-- 清掃員リスト: ${cleanerNames.join(', ')}
+- 清掃員リストと役割: 
+${cleaners.map((c: Cleaner) => `  - ${c.name} (${c.role || '役割なし'})`).join('\n')}
 
 # グループ構成
-${groups.map((g: {name: string, size: number, fixedMembers: string[]}) => `- グループ名: "${g.name}", 人数: ${g.size}人, 固定メンバー: [${g.fixedMembers.join(', ')}]`).join('\n')}
+${groups.map((g: Group) => `- グループ名: "${g.name}", 人数: ${g.size}人, 固定メンバー: [${g.fixedMembers.join(', ')}]`).join('\n')}
 
 # 組み合わせ条件
+- 特別なリクエスト: ${specialRequests || 'なし'}
 - 組み合わせたくないペア: ${forbiddenPairs || 'なし'}
 - 組み合わせたいペア: ${desiredPairs || 'なし'}
 - 前回の組み合わせ（なるべく避ける）: ${prevCombinations[0] || 'なし'}
 - 前々回の組み合わせ（なるべく避ける）: ${prevCombinations[1] || 'なし'}
 
+# 重要ルール
+- 全ての条件を厳密に守ってください。
+- 全ての清掃員を必ずいずれか1つのグループに割り当ててください。
+- 固定メンバーは必ず指定されたグループに所属させてください。
+- グループの人数は必ず指定通りにしてください。
+
 # 出力形式
 以下のJSON形式で、3つの独立したスケジュール案（schedules配列の要素）を生成してください。
-各メンバーは必ずいずれか1つのグループに所属させてください。
-固定メンバーは必ず指定されたグループに入れてください。
-JSON以外の説明文は絶対に含めないでください。
+JSON以外の説明文や前置き、後書きは絶対に含めないでください。
 
 \`\`\`json
 {
@@ -86,7 +95,6 @@ JSON以外の説明文は絶対に含めないでください。
 
     } catch (error) {
         console.error("Error in /api/generate-schedule:", error);
-        // エラーオブジェクトからより詳細な情報を取得しようと試みる
         const errorMessage = error instanceof Error ? error.message : 'An unknown error occurred';
         return res.status(500).json({ error: `AIの応答生成中にサーバーエラーが発生しました: ${errorMessage}` });
     }
