@@ -1,6 +1,5 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { GoogleGenAI, GenerateContentResponse } from "@google/genai";
 import { Group, Schedule, AiResponse } from './types';
 import Modal from './components/Modal';
 import InputSection from './components/InputSection';
@@ -123,90 +122,52 @@ const App: React.FC = () => {
 
         return true;
     }, [startDate, numCleaners, cleanerNames, numGroups, groups, forbiddenPairs, desiredPairs]);
-
+    
     const generateCombinations = useCallback(async () => {
         if (!validateInputs()) return;
-
-        const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
-        if (!apiKey) {
-            showCustomModal("APIキーが設定されていません。Vercelの環境変数に 'VITE_GEMINI_API_KEY' を設定してください。");
-            return;
-        }
 
         setIsLoading(true);
         setGeneratedSchedules([]);
 
-        const prompt = `
-あなたは清掃スケジュールの自動生成アシスタントです。
-以下の条件に基づいて、最適な清掃員の組み合わせスケジュールを3案生成してください。
-
-# 全体条件
-- 総清掃員数: ${numCleaners}人
-- 清掃員リスト: ${cleanerNames.join(', ')}
-
-# グループ構成
-${groups.map(g => `- グループ名: "${g.name}", 人数: ${g.size}人, 固定メンバー: [${g.fixedMembers.join(', ')}]`).join('\n')}
-
-# 組み合わせ条件
-- 組み合わせたくないペア: ${forbiddenPairs || 'なし'}
-- 組み合わせたいペア: ${desiredPairs || 'なし'}
-- 前回の組み合わせ（なるべく避ける）: ${prevCombinations[0] || 'なし'}
-- 前々回の組み合わせ（なるべく避ける）: ${prevCombinations[1] || 'なし'}
-
-# 出力形式
-以下のJSON形式で、3つの独立したスケジュール案（schedules配列の要素）を生成してください。
-各メンバーは必ずいずれか1つのグループに所属させてください。
-固定メンバーは必ず指定されたグループに入れてください。
-JSON以外の説明文は絶対に含めないでください。
-
-\`\`\`json
-{
-  "schedules": [
-    [
-      { "name": "グループ名1", "members": ["メンバーA", "メンバーB"] },
-      { "name": "グループ名2", "members": ["メンバーC", "メンバーD"] }
-    ],
-    [
-      { "name": "グループ名1", "members": ["メンバーA", "メンバーC"] },
-      { "name": "グループ名2", "members": ["メンバーB", "メンバーD"] }
-    ],
-    [
-      { "name": "グループ名1", "members": ["メンバーA", "メンバーD"] },
-      { "name": "グループ名2", "members": ["メンバーB", "メンバーC"] }
-    ]
-  ]
-}
-\`\`\`
-`;
+        const requestBody = {
+            numCleaners,
+            cleanerNames,
+            groups,
+            forbiddenPairs,
+            desiredPairs,
+            prevCombinations,
+        };
 
         try {
-            const ai = new GoogleGenAI({ apiKey });
-            const response: GenerateContentResponse = await ai.models.generateContent({
-                model: 'gemini-2.5-flash-preview-04-17',
-                contents: prompt,
-                config: {
-                    responseMimeType: "application/json",
-                }
+            const response = await fetch('/api/generate-schedule', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(requestBody),
             });
 
-            let jsonStr = response.text.trim();
-            const fenceRegex = /^```(\w*)?\s*\n?(.*?)\n?\s*```$/s;
-            const match = jsonStr.match(fenceRegex);
-            if (match && match[2]) {
-                jsonStr = match[2].trim();
+            const result: AiResponse | { error: string } = await response.json();
+
+            if (!response.ok) {
+                const errorMessage = (result as { error: string }).error || `サーバーエラーが発生しました: ${response.status}`;
+                throw new Error(errorMessage);
             }
 
-            const result: AiResponse = JSON.parse(jsonStr);
-
-            if (result.schedules && result.schedules.length > 0) {
-                 setGeneratedSchedules(result.schedules);
+            const scheduleResponse = result as AiResponse;
+            if (scheduleResponse.schedules && scheduleResponse.schedules.length > 0) {
+                 setGeneratedSchedules(scheduleResponse.schedules);
             } else {
-                showCustomModal('AIが有効なスケジュールを生成できませんでした。条件が厳しすぎる可能性があります。');
+                showCustomModal('AIが有効なスケジュールを生成できませんでした。条件が厳しすぎるか、AIが応答しなかった可能性があります。');
             }
 
         } catch (error) {
-            console.error("Error generating schedules with AI:", error);
-            showCustomModal("スケジュールの生成中にエラーが発生しました。AIの応答形式が正しくないか、ネットワークに問題がある可能性があります。");
+            console.error("Error fetching schedule from API:", error);
+            if (error instanceof Error) {
+                showCustomModal(`スケジュールの生成中にエラーが発生しました: ${error.message}`);
+            } else {
+                showCustomModal("スケジュールの生成中に予期せぬエラーが発生しました。");
+            }
         } finally {
             setIsLoading(false);
         }
